@@ -51,6 +51,7 @@ import {
   NetworkStats,
   SignalStats,
   ActivityTrend,
+  getDeviceStatistics,
 } from '../services/api';
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'];
@@ -76,6 +77,8 @@ const Dashboard: React.FC = () => {
   const [endTime, setEndTime] = useState<string>('23:59');
   const [timeGranularity, setTimeGranularity] = useState<'minute' | 'hour' | 'day' | 'month'>('hour');
   const [lastUpdated, setLastUpdated] = useState<string>('');
+
+  const [deviceStats, setDeviceStats] = useState<Record<string, any>>({});
 
   // Format dates to ISO format for backend compatibility
   const formatToBackendDateTime = (date: string, time: string, isEndDate: boolean = false) => {
@@ -140,20 +143,70 @@ const Dashboard: React.FC = () => {
     }
   };
 
-  // Add a function to check if a device is connected
-  const isDeviceConnected = (timestampStr: string) => {
+  const fetchDeviceStats = async (device: Device) => {
     try {
-      const deviceTime = new Date(timestampStr);
+      const stats = await getDeviceStatistics(device.username, device.device_id);
+      setDeviceStats(prev => ({
+        ...prev,
+        [`${device.username}-${device.device_id}`]: stats
+      }));
+    } catch (error) {
+      console.error('Error fetching device statistics:', error);
+    }
+  };
+
+  useEffect(() => {
+    if (previouslyConnectedDevices.length > 0) {
+      previouslyConnectedDevices.forEach(device => {
+        fetchDeviceStats(device);
+      });
+    }
+  }, [previouslyConnectedDevices]);
+
+  // Add a function to check if a device is connected
+  const isDeviceConnected = (device: Device) => {
+    try {
+      const stats = deviceStats[`${device.username}-${device.device_id}`];
+      if (!stats || !stats.last_seen) return false;
+
+      const lastSeen = new Date(stats.last_seen);
       const now = new Date();
-      
-      // Calculate the time difference in milliseconds
-      const timeDiff = now.getTime() - deviceTime.getTime();
-      
-      // Check if the difference is less than or equal to 5 minutes (5 * 60 * 1000 milliseconds)
-      return timeDiff <= 5 * 60 * 1000;
+      const timeDiff = now.getTime() - lastSeen.getTime();
+      return timeDiff <= 5 * 60 * 1000; // 5 minutes in milliseconds
     } catch (error) {
       console.error('Error checking device connection status:', error);
       return false;
+    }
+  };
+
+  // Add a function to check if a device is about to be disconnected
+  const getConnectionStatus = (device: Device) => {
+    try {
+      const stats = deviceStats[`${device.username}-${device.device_id}`];
+      if (!stats || !stats.last_seen) {
+        return {
+          isConnected: false,
+          timeUntilDisconnect: 'Never connected'
+        };
+      }
+
+      const lastSeen = new Date(stats.last_seen);
+      const now = new Date();
+      const timeDiff = (now.getTime() - lastSeen.getTime()) / (1000 * 60); // Convert to minutes
+      const isConnected = timeDiff <= 5;
+      
+      return {
+        isConnected,
+        timeUntilDisconnect: isConnected ? 
+          `${Math.floor(5 - timeDiff)} minutes remaining` : 
+          'Disconnected'
+      };
+    } catch (error) {
+      console.error('Error getting connection status:', error);
+      return {
+        isConnected: false,
+        timeUntilDisconnect: 'Error checking status'
+      };
     }
   };
 
@@ -195,54 +248,7 @@ const Dashboard: React.FC = () => {
       console.log('Raw API response for previously connected devices:', prevDevices);
 
       // Filter devices that have sent data in the last 5 minutes
-      const now = new Date();
-      const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000);
-      
-      console.log('Current time:', now.toISOString());
-      console.log('Five minutes ago:', fiveMinutesAgo.toISOString());
-      
-      const filteredCurrentDevices = prevDevices.filter(device => {
-        if (!device.last_seen) {
-          console.log('Device has no last_seen:', device);
-          return false;
-        }
-        
-        // Parse the timestamp in format "4/11/2025, 12:43:00 AM"
-        const [datePart, timePart] = device.last_seen.split(', ');
-        const [month, day, year] = datePart.split('/');
-        const [time, period] = timePart.split(' ');
-        const [hours, minutes, seconds] = time.split(':');
-        
-        // Convert to 24-hour format
-        let hour = parseInt(hours);
-        if (period === 'PM' && hour !== 12) hour += 12;
-        if (period === 'AM' && hour === 12) hour = 0;
-        
-        // Create date object
-        const lastSeen = new Date(
-          parseInt(year),
-          parseInt(month) - 1, // months are 0-based
-          parseInt(day),
-          hour,
-          parseInt(minutes),
-          parseInt(seconds)
-        );
-        
-        const timeDiff = now.getTime() - lastSeen.getTime();
-        const isWithin5Minutes = timeDiff <= 5 * 60 * 1000;
-        
-        console.log('Device timestamp check:', {
-          device: `${device.username} (${device.device_id})`,
-          last_seen: device.last_seen,
-          parsed_last_seen: lastSeen.toISOString(),
-          current_time: now.toISOString(),
-          time_diff_ms: timeDiff,
-          time_diff_minutes: timeDiff / (60 * 1000),
-          is_within_5_minutes: isWithin5Minutes
-        });
-        
-        return isWithin5Minutes;
-      });
+      const filteredCurrentDevices = prevDevices.filter(device => isDeviceConnected(device));
 
       console.log('Current devices (last 5 minutes):', filteredCurrentDevices);
 
@@ -300,6 +306,24 @@ const Dashboard: React.FC = () => {
     // Clean up interval on component unmount
     return () => clearInterval(interval);
   }, [navigate]);
+
+  // Add this useEffect for checking connection status
+  useEffect(() => {
+    const checkConnectionStatus = () => {
+      if (previouslyConnectedDevices.length > 0) {
+        const currentDevices = previouslyConnectedDevices.filter(device => isDeviceConnected(device));
+        setConnectedDevices(currentDevices);
+      }
+    };
+
+    // Check every minute
+    const interval = setInterval(checkConnectionStatus, 60000);
+    
+    // Initial check
+    checkConnectionStatus();
+
+    return () => clearInterval(interval);
+  }, [previouslyConnectedDevices, deviceStats]);
 
   const handleDateChange = () => {
     fetchData(startDate, endDate, startTime, endTime);
@@ -446,28 +470,14 @@ const Dashboard: React.FC = () => {
     console.log('Connected devices state:', connectedDevices);
   }, [connectedDevices]);
 
-  // Add a function to check if a device is about to be disconnected
-  const getConnectionStatus = (device: Device) => {
-    try {
-      const now = new Date();
-      const lastSeen = device.last_seen ? new Date(device.last_seen) : now;
-      
-      // Calculate time difference in minutes
-      const timeDiff = (now.getTime() - lastSeen.getTime()) / (1000 * 60);
-      const isConnected = timeDiff <= 5;
-      
-      return {
-        isConnected,
-        timeUntilDisconnect: isConnected ? 
-          `${Math.floor(5 - timeDiff)} minutes remaining` : 
-          'Disconnected'
-      };
-    } catch (error) {
-      console.error('Error getting connection status:', error);
-      return {
-        isConnected: false,
-        timeUntilDisconnect: 'Error checking status'
-      };
+  const handleRefresh = () => {
+    fetchData(startDate, endDate, startTime, endTime);
+    setLastUpdated(new Date().toLocaleTimeString());
+    
+    // Also check connection status immediately
+    if (previouslyConnectedDevices.length > 0) {
+      const currentDevices = previouslyConnectedDevices.filter(device => isDeviceConnected(device));
+      setConnectedDevices(currentDevices);
     }
   };
 
@@ -749,10 +759,7 @@ const Dashboard: React.FC = () => {
                 <Button 
                   variant="outlined" 
                   size="small"
-                  onClick={() => {
-                    fetchData(startDate, endDate, startTime, endTime);
-                    setLastUpdated(new Date().toLocaleTimeString());
-                  }}
+                  onClick={handleRefresh}
                 >
                   Refresh Now
                 </Button>
@@ -766,65 +773,81 @@ const Dashboard: React.FC = () => {
                     <TableCell>Device ID</TableCell>
                     <TableCell>IP Address</TableCell>
                     <TableCell>MAC Address</TableCell>
+                    <TableCell>Last Seen</TableCell>
                     <TableCell>Status</TableCell>
                     <TableCell>Time Until Disconnect</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {connectedDevices && connectedDevices.length > 0 ? (
-                    connectedDevices.map((device, index) => {
-                      const status = getConnectionStatus(device);
-                      return (
-                        <TableRow 
-                          key={index}
-                          onClick={() => handleDeviceClick(device.username, device.device_id)}
-                          sx={{ 
-                            cursor: 'pointer',
-                            '&:hover': {
-                              backgroundColor: 'rgba(0, 0, 0, 0.04)'
-                            }
-                          }}
-                        >
-                          <TableCell>
-                            <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                              {device.username}
-                              <Typography variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
-                                (Click for details)
+                  {previouslyConnectedDevices && previouslyConnectedDevices.length > 0 ? (
+                    previouslyConnectedDevices
+                      .filter(device => {
+                        const status = getConnectionStatus(device);
+                        return status.isConnected;
+                      })
+                      .filter((device, index, self) => 
+                        index === self.findIndex(d => 
+                          d.username === device.username && 
+                          d.device_id === device.device_id
+                        )
+                      )
+                      .map((device, index) => {
+                        const status = getConnectionStatus(device);
+                        const stats = deviceStats[`${device.username}-${device.device_id}`];
+                        const lastSeen = stats?.last_seen ? new Date(stats.last_seen).toLocaleTimeString() : 'Never';
+                        
+                        return (
+                          <TableRow 
+                            key={index}
+                            onClick={() => handleDeviceClick(device.username, device.device_id)}
+                            sx={{ 
+                              cursor: 'pointer',
+                              '&:hover': {
+                                backgroundColor: 'rgba(0, 0, 0, 0.04)'
+                              }
+                            }}
+                          >
+                            <TableCell>
+                              <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                                {device.username}
+                                <Typography variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
+                                  (Click for details)
+                                </Typography>
+                              </Box>
+                            </TableCell>
+                            <TableCell>{device.device_id}</TableCell>
+                            <TableCell>{device.ip}</TableCell>
+                            <TableCell>{device.mac}</TableCell>
+                            <TableCell>{lastSeen}</TableCell>
+                            <TableCell>
+                              <Typography 
+                                variant="body2" 
+                                sx={{ 
+                                  color: status.isConnected ? 'success.main' : 'error.main',
+                                  fontWeight: 'bold'
+                                }}
+                              >
+                                {status.isConnected ? 'Connected' : 'Disconnected'}
                               </Typography>
-                            </Box>
-                          </TableCell>
-                          <TableCell>{device.device_id}</TableCell>
-                          <TableCell>{device.ip}</TableCell>
-                          <TableCell>{device.mac}</TableCell>
-                          <TableCell>
-                            <Typography 
-                              variant="body2" 
-                              sx={{ 
-                                color: status.isConnected ? 'success.main' : 'error.main',
-                                fontWeight: 'bold'
-                              }}
-                            >
-                              {status.isConnected ? 'Connected' : 'Disconnected'}
-                            </Typography>
-                          </TableCell>
-                          <TableCell>
-                            <Typography 
-                              variant="body2" 
-                              sx={{ 
-                                color: status.isConnected ? 
-                                  (parseInt(status.timeUntilDisconnect) < 2 ? 'warning.main' : 'text.secondary') : 
-                                  'error.main'
-                              }}
-                            >
-                              {status.timeUntilDisconnect}
-                            </Typography>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })
+                            </TableCell>
+                            <TableCell>
+                              <Typography 
+                                variant="body2" 
+                                sx={{ 
+                                  color: status.isConnected ? 
+                                    (parseInt(status.timeUntilDisconnect) < 2 ? 'warning.main' : 'text.secondary') : 
+                                    'error.main'
+                                }}
+                              >
+                                {status.timeUntilDisconnect}
+                              </Typography>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })
                   ) : (
                     <TableRow>
-                      <TableCell colSpan={6} align="center">No devices currently connected</TableCell>
+                      <TableCell colSpan={7} align="center">No devices currently connected</TableCell>
                     </TableRow>
                   )}
                 </TableBody>
