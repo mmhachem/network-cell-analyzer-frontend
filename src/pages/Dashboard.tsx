@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect , useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Container,
@@ -79,6 +79,23 @@ const Dashboard: React.FC = () => {
   const [lastUpdated, setLastUpdated] = useState<string>('');
 
   const [deviceStats, setDeviceStats] = useState<Record<string, any>>({});
+  const latestFilters = useRef({
+    startDate,
+    endDate,
+    startTime,
+    endTime,
+    timeGranularity
+  });
+  useEffect(() => {
+    latestFilters.current = {
+      startDate,
+      endDate,
+      startTime,
+      endTime,
+      timeGranularity
+    };
+  }, [startDate, endDate, startTime, endTime, timeGranularity]);
+  
 
   // Format dates to ISO format for backend compatibility
   const formatToBackendDateTime = (date: string, time: string, isEndDate: boolean = false) => {
@@ -90,6 +107,8 @@ const Dashboard: React.FC = () => {
     // For start date, set time to the specified time
     return `${date}T${hours}:${minutes}:00`;
   };
+
+   
 
   const fetchActivityTrend = async (granularity: 'minute' | 'hour' | 'day' | 'month' = timeGranularity) => {
     try {
@@ -294,18 +313,22 @@ const Dashboard: React.FC = () => {
   };
 
   useEffect(() => {
+    const { startDate, endDate, startTime, endTime } = latestFilters.current;
+  
+    // Initial fetch
     fetchData(startDate, endDate, startTime, endTime);
     setLastUpdated(new Date().toLocaleTimeString());
-    
-    // Set up auto-refresh every 10 seconds to keep the list current
+  
+    // Auto-refresh every 10s using latest filters
     const interval = setInterval(() => {
+      const { startDate, endDate, startTime, endTime } = latestFilters.current;
       fetchData(startDate, endDate, startTime, endTime);
       setLastUpdated(new Date().toLocaleTimeString());
     }, 10000);
-
-    // Clean up interval on component unmount
+  
     return () => clearInterval(interval);
-  }, [navigate]);
+  }, []);
+  
 
   // Add this useEffect for checking connection status
   useEffect(() => {
