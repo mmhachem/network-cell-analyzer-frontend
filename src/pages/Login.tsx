@@ -10,9 +10,13 @@ const Login: React.FC = () => {
   const [error, setError] = useState('');
   const { login } = useAuth();
   const navigate = useNavigate();
+  const [loading, setLoading] = useState(false);
+
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setLoading(true);
+    setError('');
     try {
       const response = await adminLogin(username, password);
       if (response.admin_token) {
@@ -28,8 +32,11 @@ const Login: React.FC = () => {
       } else {
         setError('An error occurred during login');
       }
+    } finally {
+      setLoading(false);
     }
   };
+  
 
   return (
     <Container component="main" maxWidth="xs">
@@ -79,9 +86,11 @@ const Login: React.FC = () => {
               fullWidth
               variant="contained"
               sx={{ mt: 3, mb: 2 }}
+              disabled={loading}
             >
-              Log in
+              {loading ? 'Logging in...' : 'Log in'}
             </Button>
+
           </Box>
         </Box>
       </Paper>

@@ -355,16 +355,25 @@ const Dashboard: React.FC = () => {
   // Transform NetworkStats to chart data
   const transformNetworkStats = (stats: NetworkStats | null) => {
     if (!stats) return [];
-
+  
     return Object.entries(stats).map(([name, value]) => {
-      // Remove % sign and convert to number
-      const numericValue = parseFloat(value.replace('%', ''));
+      let numericValue: number;
+  
+      if (typeof value === 'string') {
+        numericValue = parseFloat(value.replace('%', ''));
+      } else if (typeof value === 'number') {
+        numericValue = value;
+      } else {
+        numericValue = 0;
+      }
+  
       return {
         name,
         value: isNaN(numericValue) ? 0 : numericValue,
       };
     });
   };
+  
 
   // Transform SignalStats to chart data
   const transformSignalStats = (stats: SignalStats | null) => {
